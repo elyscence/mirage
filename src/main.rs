@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use anyhow::Result;
 use serde::Deserialize;
 use sqlx::{Sqlite, SqlitePool, migrate::MigrateDatabase};
@@ -72,19 +74,24 @@ async fn main() -> Result<()> {
         .expect("Failed to connect to database");
 
     loop {
-        let (mut socket, _addr) = listener.accept().await?;
+        let (mut socket, addr) = listener.accept().await?;
 
         let pool_clone = pool.clone();
         let json_clone = json.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(&mut socket, &json_clone, &pool_clone).await {
+            if let Err(e) = handle_connection(&mut socket, &json_clone, &pool_clone, addr).await {
                 warn!("ошибка соединения: {}", e);
             }
         });
     }
 }
 
-async fn handle_connection(socket: &mut TcpStream, json: &str, pool: &SqlitePool) -> Result<()> {
+async fn handle_connection(
+    socket: &mut TcpStream,
+    json: &str,
+    pool: &SqlitePool,
+    addr: SocketAddr,
+) -> Result<()> {
     let mut reached_ping = false;
 
     let _length = read_varint(socket).await?;
@@ -94,7 +101,7 @@ async fn handle_connection(socket: &mut TcpStream, json: &str, pool: &SqlitePool
 
     let mut addr_buf = vec![0u8; address_length as usize];
     socket.read_exact(&mut addr_buf).await?;
-    let address = String::from_utf8_lossy(&addr_buf);
+    let _address = String::from_utf8_lossy(&addr_buf);
 
     let mut port_buf = [0u8; 2];
     socket.read_exact(&mut port_buf).await?;
@@ -120,7 +127,7 @@ async fn handle_connection(socket: &mut TcpStream, json: &str, pool: &SqlitePool
 
     let connection_data = ConnectionData {
         protocol,
-        ip: address.to_string(),
+        ip: addr.ip().to_string(),
         port: port as u32,
         timestamp: chrono::Utc::now().to_rfc3339(),
         next_state,
