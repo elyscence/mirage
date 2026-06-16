@@ -40,6 +40,7 @@ struct ConnectionData {
     timestamp: String,
     next_state: i32,
     reached_ping: bool,
+    username: Option<String>,
 }
 
 #[tokio::main]
@@ -93,6 +94,7 @@ async fn handle_connection(
     addr: SocketAddr,
 ) -> Result<()> {
     let mut reached_ping = false;
+    let mut username: Option<String> = None;
 
     let _length = read_varint(socket).await?;
     let _id = read_varint(socket).await?;
@@ -109,21 +111,34 @@ async fn handle_connection(
 
     let next_state = read_varint(socket).await?;
 
-    if next_state == 1 {
-        let _length = read_varint(socket).await?;
-        let id = read_varint(socket).await?;
-
-        if id == 0 {
-            handle_status(socket, json).await?;
+    match next_state {
+        1 => {
             let _length = read_varint(socket).await?;
             let id = read_varint(socket).await?;
-            let mut ping_buf = [0u8; 8];
-            socket.read_exact(&mut ping_buf).await?;
-            if id == 1 {
-                reached_ping = handle_ping(socket, ping_buf).await?;
-            };
+
+            if id == 0 {
+                handle_status(socket, json).await?;
+                let _length = read_varint(socket).await?;
+                let id = read_varint(socket).await?;
+                let mut ping_buf = [0u8; 8];
+                socket.read_exact(&mut ping_buf).await?;
+                if id == 1 {
+                    reached_ping = handle_ping(socket, ping_buf).await?;
+                };
+            }
         }
-    }
+        2 => {
+            let _length = read_varint(socket).await?;
+            let _id = read_varint(socket).await?;
+            let username_length = read_varint(socket).await?;
+            let mut username_buf = vec![0u8; username_length as usize];
+            socket.read_exact(&mut username_buf).await?;
+            username = Some(String::from_utf8_lossy(&username_buf).to_string());
+        }
+        _ => info!("something other"),
+    };
+
+    info!("next state: {next_state}");
 
     let connection_data = ConnectionData {
         protocol,
@@ -132,6 +147,7 @@ async fn handle_connection(
         timestamp: chrono::Utc::now().to_rfc3339(),
         next_state,
         reached_ping,
+        username,
     };
 
     add_connection(pool, connection_data).await?;
@@ -204,13 +220,14 @@ fn varint_size(mut value: i32) -> i32 {
 
 async fn add_connection(pool: &SqlitePool, connection: ConnectionData) -> Result<()> {
     sqlx::query!(
-        "INSERT INTO scans (protocol, ip, port, timestamp, next_state, reached_ping) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO scans (protocol, ip, port, timestamp, next_state, reached_ping, username) VALUES (?, ?, ?, ?, ?, ?, ?)",
         connection.protocol,
         connection.ip,
         connection.port,
         connection.timestamp,
         connection.next_state,
         connection.reached_ping,
+        connection.username,
     )
     .execute(pool)
     .await?;
